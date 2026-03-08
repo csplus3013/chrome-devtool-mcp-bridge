@@ -128,6 +128,16 @@ curl -v -N -H "Accept: text/event-stream" http://localhost:3000/mcp
 docker compose logs -f mcp-bridge
 ```
 
+### Step 3.5: Check if Chrome running directly devtool container
+
+```bash
+docker exec chrome-mcp-server node -e "const dns=require('dns');dns.lookup('host.docker.internal',(_,ip)=>{require('http').get('http://'+ip+':9322/json/version',r=>{let d='';r.on('data',c=>d+=c);r.on('end',()=>console.log(d))}).on('error',e=>console.log('ERROR:',e.message))})"
+```
+
+```bash
+docker compose logs -f chrome-mcp-server
+```
+
 **Confirm V10 is running:**
 
 ```
