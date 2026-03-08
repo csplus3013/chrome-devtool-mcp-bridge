@@ -1,0 +1,18 @@
+# Use Alpine Linux which uses musl natively
+FROM rust:alpine AS builder
+
+# Install build dependencies
+RUN apk add --no-cache musl-dev gcc
+
+WORKDIR /app
+COPY Cargo.toml ./
+COPY src ./src
+
+# Build a fully static binary
+# (Because alpine uses musl, rust uses x86_64-unknown-linux-musl by default)
+RUN RUSTFLAGS="-C target-feature=+crt-static" cargo build --release
+RUN cp target/release/mcp-server-bridge /mcp-server-bridge
+
+# Final stage just to hold the binary so we can export it
+FROM scratch
+COPY --from=builder /mcp-server-bridge /mcp-server-bridge

@@ -1,0 +1,33 @@
+FROM debian:bookworm-slim
+
+# Install Docker CLI so the bridge can call `docker exec`
+RUN apt-get update -q \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        gnupg \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg \
+       | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+       https://download.docker.com/linux/debian bookworm stable" \
+       > /etc/apt/sources.list.d/docker.list \
+    && apt-get update -q \
+    && apt-get install -y --no-install-recommends docker-ce-cli \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the locally compiled binary directly into the image
+COPY bin/mcp-server-bridge /usr/local/bin/mcp-server-bridge
+
+# Ensure it's executable
+RUN chmod +x /usr/local/bin/mcp-server-bridge
+
+EXPOSE 3000
+
+ENV PORT=3000 \
+    BIND_ADDR=0.0.0.0 \
+    MCP_CONTAINER=chrome-mcp-server \
+    MCP_COMMAND=chrome-devtools-mcp \
+    RUST_LOG=info
+
+ENTRYPOINT ["/usr/local/bin/mcp-server-bridge"]

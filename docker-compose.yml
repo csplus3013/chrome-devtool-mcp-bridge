@@ -1,0 +1,41 @@
+services:
+  mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.devtool
+    image: chrome-devtools-mcp
+    container_name: chrome-mcp-server
+    environment:
+      - CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS=1
+      - CHROME_DEBUG_PORT=9322   # ← Change this to match your Chrome remote debugging port
+    # Keep container alive so `docker exec -i` can spawn the MCP server on demand
+    # host.docker.internal is automatically available on Docker Desktop for Windows
+    networks:
+      - chrome-mcp-net
+    restart: unless-stopped
+  mcp-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.bridge
+    image: mcp-server-bridge
+    container_name: mcp-bridge
+    restart: unless-stopped
+    ports:
+      - "${PORT:-3000}:3000"
+    environment:
+      - PORT=3000
+      - MCP_CONTAINER=${MCP_CONTAINER:-chrome-mcp-server}
+      - MCP_COMMAND=${MCP_COMMAND:-chrome-devtools-mcp}
+      - MCP_ARGS=--browser-url=http://host.docker.internal:9322
+      - RUST_LOG=${RUST_LOG:-info}
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Drop the compiled binary in ./bin/ to update without rebuilding the image
+      - ./bin:/app
+    networks:
+      - chrome-mcp-net
+
+
+networks:
+  chrome-mcp-net:
+    name: chrome-mcp-network-bridge
