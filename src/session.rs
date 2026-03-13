@@ -6,6 +6,7 @@ use std::sync::Arc;
 use dashmap::DashMap;
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::Child,
     sync::{broadcast, mpsc},
     task::JoinHandle,
 };
@@ -19,15 +20,37 @@ use crate::process::{spawn_mcp_process, ProcessConfig};
 pub type SseMessage = String;
 
 /// Handle for a single MCP session.
+///
+/// Dropping this struct will:
+/// - cancel the CancellationToken → stops reader/writer tasks cleanly
+/// - abort the reader/writer JoinHandles (Tokio tasks are detached on drop
+///   unless explicitly aborted, so we abort them here)
+/// - drop the Child → kill_on_drop fires, sending SIGKILL to `docker exec`
+///   which in turn terminates the chrome-devtools-mcp process inside the container
 pub struct Session {
     /// Send a JSON-RPC line to the child's stdin.
     pub stdin_tx: mpsc::Sender<String>,
     /// Subscribe to JSON-RPC lines coming from child's stdout.
     pub sse_tx: broadcast::Sender<SseMessage>,
-    /// Cancel token — drop this to kill the child and background tasks.
+    /// Cancel token — signalled when the session is torn down.
     pub cancel: CancellationToken,
+    // The child MUST be stored here so kill_on_drop fires when Session is dropped.
+    _child: Child,
     _reader_task: JoinHandle<()>,
     _writer_task: JoinHandle<()>,
+    _watcher_task: JoinHandle<()>,
+}
+
+impl Drop for Session {
+    fn drop(&mut self) {
+        // Signal cancellation first (lets tasks exit their select loops cleanly).
+        self.cancel.cancel();
+        // Abort detached tasks so they don't linger after the Session is gone.
+        self._reader_task.abort();
+        self._writer_task.abort();
+        self._watcher_task.abort();
+        // _child is dropped here → kill_on_drop → SIGKILL to docker exec process
+    }
 }
 
 /// Thread-safe map of session_id → Session.
@@ -40,8 +63,7 @@ pub fn new_store() -> SessionStore {
 
 /// Spawn a new session: starts the child process and two bridge tasks.
 ///
-/// Returns the session ID, the SSE sender (to subscribe in the handler) and
-/// a receiver for lines coming from the child.
+/// Returns the session ID so the caller can subscribe via `sse_tx`.
 pub async fn create_session(
     store: &SessionStore,
     cfg: &ProcessConfig,
@@ -49,7 +71,7 @@ pub async fn create_session(
     let id = Uuid::new_v4();
     let cancel = CancellationToken::new();
 
-    // Spawn child process
+    // Spawn child process (kill_on_drop = true is set in process.rs)
     let mut child = spawn_mcp_process(cfg).map_err(|e| {
         error!(?e, "failed to spawn MCP child process");
         e
@@ -137,23 +159,30 @@ pub async fn create_session(
         }
     });
 
-    // Also watch the child process exit
+    // Watcher task: if the child exits on its own, clean up the session entry.
+    // NOTE: We no longer hold `child` here — we store it in the Session struct.
+    //       Instead we watch the cancel token being triggered by Session::drop,
+    //       or by the reader task detecting stdout EOF (which signals process exit).
+    //       The watcher simply removes the store entry when cancel fires.
     let cancel_watcher = cancel.clone();
     let id_copy = id;
     let store_clone = store.clone();
-    tokio::spawn(async move {
-        let _ = child.wait().await;
-        warn!(session_id = %id_copy, "MCP child process exited");
-        cancel_watcher.cancel();
-        store_clone.remove(&id_copy);
+    let watcher_task = tokio::spawn(async move {
+        cancel_watcher.cancelled().await;
+        // Session may already have been removed by remove_session(), that is fine.
+        if store_clone.remove(&id_copy).is_some() {
+            warn!(session_id = %id_copy, "session cleaned up by watcher (process exit or cancel)");
+        }
     });
 
     let session = Session {
         stdin_tx,
         sse_tx,
         cancel,
+        _child: child,
         _reader_task: reader_task,
         _writer_task: writer_task,
+        _watcher_task: watcher_task,
     };
 
     store.insert(id, session);
@@ -161,10 +190,11 @@ pub async fn create_session(
     Ok(id)
 }
 
-/// Remove a session by ID and cancel its tasks / child process.
+/// Remove a session by ID.
+/// The Session's Drop impl will cancel the token, abort tasks, and kill the child.
 pub fn remove_session(store: &SessionStore, id: &Uuid) {
-    if let Some((_, session)) = store.remove(id) {
-        session.cancel.cancel();
+    if store.remove(id).is_some() {
+        // Session drop fires here → cancel + abort + kill_on_drop
         info!(session_id = %id, "session removed");
     }
 }

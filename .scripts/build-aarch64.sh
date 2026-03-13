@@ -2,10 +2,9 @@
 set -euo pipefail
 
 # Build mcp-server-bridge for aarch64 with older glibc compatibility using Ubuntu 20.04.
-# Output: .//mcp-server-bridge-aarch64
+# Output: .aarch64-machine/bin/mcp-server-bridge-aarch64
 
-#ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 if ! command -v docker >/dev/null 2>&1; then
   echo "Docker is required to run this script." >&2
@@ -21,11 +20,12 @@ cat <<'EOF'
 [build-aarch64] Building aarch64 binary with glibc 2.31 compatibility
 EOF
 
-docker run --rm -it \
+docker run --rm \
+  -e DEBIAN_FRONTEND=noninteractive \
   -v "${ROOT_DIR}":/work -w /work \
   "${IMAGE}" bash -lc '
     apt-get update && \
-    apt-get install -y build-essential curl pkg-config ca-certificates gcc-aarch64-linux-gnu && \
+    apt-get install -y --no-install-recommends build-essential curl pkg-config ca-certificates gcc-aarch64-linux-gnu libc6-dev-arm64-cross && \
     curl https://sh.rustup.rs -sSf | sh -s -- -y && \
     . $HOME/.cargo/env && \
     rustup target add aarch64-unknown-linux-gnu && \
@@ -40,6 +40,6 @@ docker run --rm -it \
     cargo build --release --target aarch64-unknown-linux-gnu
   '
 
-cp target/aarch64-unknown-linux-gnu/release/mcp-server-bridge ./mcp-server-bridge-aarch64
-tar -cvzf mcp-server-bridge_aarch64_bin.tar mcp-server-bridge-aarch64
-echo "[build-aarch64] Done: .//mcp-server-bridge-aarch64"
+mkdir -p .aarch64-machine/bin
+cp target/aarch64-unknown-linux-gnu/release/mcp-server-bridge .aarch64-machine/bin/mcp-server-bridge-aarch64
+echo "[build-aarch64] Done: .aarch64-machine/bin/mcp-server-bridge-aarch64"

@@ -1,0 +1,49 @@
+services:
+  mcp-server:
+    image: chrome-devtools-mcp
+    container_name: chrome-mcp-server
+    environment:
+      - CHROME_DEVTOOLS_MCP_NO_USAGE_STATISTICS=1
+      - CHROME_DEBUG_PORT=9322
+    networks:
+      - mcp-tools-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 2048M
+
+  mcp-bridge:
+    image: mcp-server-bridge
+    container_name: mcp-bridge
+    restart: unless-stopped
+    ports:
+      - "3003:3000"
+    extra_hosts:
+#      - "host.docker.internal:host-gateway"
+      - "host.docker.internal:172.21.0.1"
+    environment:
+      - PORT=3000
+      - MCP_CONTAINER=chrome-mcp-server
+      - MCP_COMMAND=chrome-devtools-mcp
+      # Talk directly to the host IP on the original port 9322
+#      - MCP_ARGS=--browser-url=http://host.docker.internal:9322
+      # UPDATED: Point to the new socat port (9323)
+#      - MCP_ARGS=--browser-url=http://host.docker.internal:9323
+      - MCP_ARGS=--browser-url=http://172.21.0.1:9323
+      - RUST_LOG=info
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./bin:/app
+    networks:
+      - mcp-tools-network
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+networks:
+  mcp-tools-network:
+    external: true

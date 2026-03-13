@@ -123,7 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
         .init();
 
     let args = Args::parse();
-    info!("@@@ MCP BRIDGE VERSION 10 - CHROME HOST FIX @@@");
+    info!("@@@ MCP BRIDGE VERSION 11 - SESSION CLEANUP FIX @@@");
 
     // Clap Vec env can be tricky. Let's explicitly check the env var.
     let mut mcp_args: Vec<String> = args.mcp_args.into_iter()

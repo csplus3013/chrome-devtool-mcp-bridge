@@ -19,6 +19,20 @@ use crate::{
     AppState,
 };
 
+/// RAII guard: removes the session (killing the child process) when dropped.
+/// This fires both on clean stream termination AND on abrupt client disconnect
+/// (when Axum cancels the future mid-stream).
+struct SessionDropGuard {
+    store: crate::session::SessionStore,
+    session_id: Uuid,
+}
+
+impl Drop for SessionDropGuard {
+    fn drop(&mut self) {
+        remove_session(&self.store, &self.session_id);
+    }
+}
+
 /// GET /mcp — open an SSE stream, spawn a child MCP process for this session.
 pub async fn sse_handler(
     headers: HeaderMap,
@@ -50,8 +64,14 @@ pub async fn sse_handler(
     };
 
     let broadcast_stream = BroadcastStream::new(rx);
-    let store_clone = store.clone();
     let sid = session_id;
+
+    // The drop guard ensures cleanup happens whether the stream ends naturally
+    // OR the client disconnects abruptly (Axum cancels the future).
+    let guard = SessionDropGuard {
+        store: store.clone(),
+        session_id: sid,
+    };
 
     // Determine the absolute base URL for the 'endpoint' event.
     // Standard MCP clients work best if this is an absolute URL or a path they can resolve.
@@ -59,18 +79,22 @@ pub async fn sse_handler(
     // We assume http for now as this is a local bridge.
     let absolute_endpoint = format!("http://{}/mcp?session_id={}", host, sid);
 
-    let event_stream = broadcast_stream.filter_map(move |result| {
-        let val = match result {
-            Ok(line) => Some(Ok::<Event, Infallible>(
-                Event::default().event("message").data(line),
-            )),
-            Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
-                warn!(lagged = n, "SSE consumer lagged behind");
-                None
-            }
-        };
-        async move { val }
-    });
+    // Move the guard into the stream so its Drop runs exactly when the SSE stream is dropped
+    // (client disconnect / cancellation). This guarantees session cleanup.
+    let event_stream = broadcast_stream
+        .map(move |result| {
+            let val = match result {
+                Ok(line) => Some(Ok::<Event, Infallible>(
+                    Event::default().event("message").data(line),
+                )),
+                Err(tokio_stream::wrappers::errors::BroadcastStreamRecvError::Lagged(n)) => {
+                    warn!(lagged = n, "SSE consumer lagged behind");
+                    None
+                }
+            };
+            val
+        })
+        .filter_map(|v| async move { v });
 
     let endpoint_event = stream::once(async move {
         Ok::<Event, Infallible>(
@@ -80,10 +104,11 @@ pub async fn sse_handler(
         )
     });
 
-    let full_stream = endpoint_event.chain(event_stream).chain(stream::once(async move {
-        remove_session(&store_clone, &sid);
-        Ok::<Event, Infallible>(Event::default().comment("bye"))
-    }));
+    // Tie the guard lifetime to the stream by capturing it in this closure
+    let full_stream = endpoint_event.chain(event_stream).map(move |evt| {
+        let _keep_guard_alive = &guard;
+        evt
+    });
 
     let sse = Sse::new(full_stream).keep_alive(
         axum::response::sse::KeepAlive::new()

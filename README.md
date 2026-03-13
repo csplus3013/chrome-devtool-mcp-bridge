@@ -1,4 +1,4 @@
-# 🌉 MCP Server Bridge (V10)
+# 🌉 MCP Server Bridge (V11)
 
 A high-performance **Rust bridge** that exposes stdio-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers over the network using **HTTP + SSE** (Server-Sent Events).
 
@@ -6,7 +6,12 @@ Designed specifically to make the **Chrome DevTools MCP server** accessible to r
 
 ---
 
-## 🚀 Version 10 Core Features
+## 🚀 Version 11 Core Features
+
+- **Deterministic Session Cleanup**: Fixes an SSE lifecycle edge case where client disconnects could leave orphan `chrome-devtools-mcp` Node processes running. Sessions are now guaranteed to drop when the SSE stream ends, ensuring the child process is killed.
+- **No More "Node Army"**: Prevents accumulation of idle MCP processes when clients reconnect repeatedly.
+
+### Previously Introduced (V10)
 
 - **SSE Multiplexing**: Spawns unique, isolated `docker exec` sessions per client.
 - **Auto-Cleanup**: Automatically kills zombie child processes when network connections drop.
@@ -48,10 +53,27 @@ docker image rm mcp-server-bridge  # Clear cache
 docker compose up -d --build mcp-bridge
 ```
 
+### ⚠️ Important: Memory Limits
+
+Due to memory accumulation over time in the underlying `chrome-devtools-mcp` Node process, it is highly recommended to enforce memory limits within your `docker-compose.yml`.
+
+Example snippet:
+
+```yaml
+  mcp-server:
+    image: chrome-devtools-mcp
+    deploy:
+      resources:
+        limits:
+          memory: 2048M  # Caps memory to 2GB to prevent background Node leak from crashing host
+```
+
+The Rust bridge itself is extremely lightweight and can be safely capped at `256M`.
+
 ### Environment Variables
 
 | Variable | Default | Purpose |
-|---|---|---|
+| --- | --- | --- |
 | `MCP_ARGS` | `""` | Arguments passed to the inner process. Example: `--browser-url=http://host.docker.internal:9322` |
 | `MCP_CONTAINER` | `chrome-mcp-server` | The target container for `docker exec`. |
 | `PORT` | `3000` | Bridge listening port. |
@@ -138,10 +160,10 @@ docker exec chrome-mcp-server node -e "const dns=require('dns');dns.lookup('host
 docker compose logs -f chrome-mcp-server
 ```
 
-**Confirm V10 is running:**
+**Confirm V11 is running:**
 
-```
-@@@ MCP BRIDGE VERSION 10 - CHROME HOST FIX @@@
+```text
+@@@ MCP BRIDGE VERSION 11 - SESSION CLEANUP FIX @@@
 Resolved hostname to IP  original=http://host.docker.internal:9322  resolved=http://192.168.65.254:9322
 mcp-server-bridge listening  addr=0.0.0.0:3000  mcp_args=["--browser-url=http://192.168.65.254:9322"]
 ```
