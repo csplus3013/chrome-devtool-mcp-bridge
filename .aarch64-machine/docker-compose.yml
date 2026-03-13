@@ -1,5 +1,8 @@
 services:
   mcp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.devtool
     image: chrome-devtools-mcp
     container_name: chrome-mcp-server
     environment:
@@ -16,6 +19,9 @@ services:
           memory: 2048M
 
   mcp-bridge:
+    build:
+      context: .
+      dockerfile: Dockerfile.bridge
     image: mcp-server-bridge
     container_name: mcp-bridge
     restart: unless-stopped
