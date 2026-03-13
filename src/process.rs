@@ -19,14 +19,24 @@ pub struct ProcessConfig {
 /// Returns a `Child` handle with stdin/stdout pipes attached.
 pub fn spawn_mcp_process(cfg: &ProcessConfig) -> std::io::Result<Child> {
     let mut cmd = Command::new("docker");
+    // Run via `sh -c` and `exec` so signals propagate correctly to the Node
+    // process inside the container when the parent `docker exec` is killed.
+    // Without this, killing `docker exec` can leave `chrome-devtools-mcp`
+    // orphaned in the container.
     cmd.arg("exec")
         .arg("-i")
         .arg(&cfg.container)
-        .arg(&cfg.mcp_command);
+        .arg("sh")
+        .arg("-c");
 
+    // Build command string: exec chrome-devtools-mcp <args>
+    let mut inner = format!("exec {}", cfg.mcp_command);
     for arg in cfg.mcp_args.iter().filter(|s| !s.trim().is_empty()) {
-        cmd.arg(arg);
+        inner.push(' ');
+        inner.push_str(arg);
     }
+
+    cmd.arg(inner);
 
     cmd.stdin(Stdio::piped())
         .stdout(Stdio::piped())

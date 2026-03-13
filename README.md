@@ -1,4 +1,4 @@
-# 🌉 MCP Server Bridge (V11)
+# 🌉 MCP Server Bridge (V16)
 
 A high-performance **Rust bridge** that exposes stdio-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers over the network using **HTTP + SSE** (Server-Sent Events).
 
@@ -6,7 +6,13 @@ Designed specifically to make the **Chrome DevTools MCP server** accessible to r
 
 ---
 
-## 🚀 Version 11 Core Features
+## 🚀 Version 16 Core Features
+
+- **Guaranteed Orphan Cleanup**: On session teardown the bridge executes `docker exec <container> pkill -f chrome-devtools-mcp` to ensure any detached Node MCP process is terminated.
+- **No More "Node Army"**: Prevents accumulation of idle `chrome-devtools-mcp` processes even if clients crash during tool execution.
+- **Fast Recovery**: Cleanup is lightweight (no container restart), so reconnects are immediate and container memory stabilizes.
+
+### Previously Introduced (V11)
 
 - **Deterministic Session Cleanup**: Fixes an SSE lifecycle edge case where client disconnects could leave orphan `chrome-devtools-mcp` Node processes running. Sessions are now guaranteed to drop when the SSE stream ends, ensuring the child process is killed.
 - **No More "Node Army"**: Prevents accumulation of idle MCP processes when clients reconnect repeatedly.
@@ -14,7 +20,7 @@ Designed specifically to make the **Chrome DevTools MCP server** accessible to r
 ### Previously Introduced (V10)
 
 - **SSE Multiplexing**: Spawns unique, isolated `docker exec` sessions per client.
-- **Auto-Cleanup**: Automatically kills zombie child processes when network connections drop.
+- **Auto-Cleanup**: When a session ends, the bridge force-cleans any orphan `chrome-devtools-mcp` processes inside the container using `docker exec pkill -f chrome-devtools-mcp`, preventing the classic "node army" problem.
 - **Hyper-Robust Session Handling**: Supports session IDs via `X-Session-ID` headers, query parameters (`?session_id=...`), or the standard MCP `endpoint` event.
 - **Cross-Platform Readiness**: Full support for Windows (Host) to Docker (Linux) communication.
 - **Permissive CORS**: All origins, methods, and headers allowed — works from `localhost`, LAN IPs, and remote machines without CORS preflight failures.

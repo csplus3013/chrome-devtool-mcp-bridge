@@ -39,6 +39,8 @@ pub struct Session {
     _reader_task: JoinHandle<()>,
     _writer_task: JoinHandle<()>,
     _watcher_task: JoinHandle<()>,
+    _container: String,
+    _mcp_command: String,
 }
 
 impl Drop for Session {
@@ -167,12 +169,28 @@ pub async fn create_session(
     let cancel_watcher = cancel.clone();
     let id_copy = id;
     let store_clone = store.clone();
+    let container_name = cfg.container.clone();
     let watcher_task = tokio::spawn(async move {
         cancel_watcher.cancelled().await;
         // Session may already have been removed by remove_session(), that is fine.
         if store_clone.remove(&id_copy).is_some() {
             warn!(session_id = %id_copy, "session cleaned up by watcher (process exit or cancel)");
         }
+
+        // Always run safety cleanup: ensure orphan MCP processes inside the container are terminated.
+        // In some crash scenarios the session entry is removed earlier and the previous logic
+        // skipped this cleanup, leaving chrome-devtools-mcp processes running.
+        // Final fallback: kill any orphan chrome-devtools-mcp processes.
+        // Using pkill avoids heavy container restart and ensures cleanup
+        // even if the session entry was removed earlier.
+        let _ = tokio::process::Command::new("docker")
+            .arg("exec")
+            .arg(&container_name)
+            .arg("pkill")
+            .arg("-f")
+            .arg("chrome-devtools-mcp")
+            .output()
+            .await;
     });
 
     let session = Session {
@@ -183,6 +201,8 @@ pub async fn create_session(
         _reader_task: reader_task,
         _writer_task: writer_task,
         _watcher_task: watcher_task,
+        _container: cfg.container.clone(),
+        _mcp_command: cfg.mcp_command.clone(),
     };
 
     store.insert(id, session);
@@ -196,5 +216,19 @@ pub fn remove_session(store: &SessionStore, id: &Uuid) {
     if store.remove(id).is_some() {
         // Session drop fires here → cancel + abort + kill_on_drop
         info!(session_id = %id, "session removed");
+        // Kill any remaining chrome-devtools-mcp processes inside the container.
+        // This is lighter than restarting the whole container and sufficient
+        // because only one MCP client/session is expected at a time.
+        let container = std::env::var("MCP_CONTAINER").unwrap_or_else(|_| "chrome-mcp-server".to_string());
+        tokio::spawn(async move {
+            let _ = tokio::process::Command::new("docker")
+                .arg("exec")
+                .arg(&container)
+                .arg("pkill")
+                .arg("-f")
+                .arg("chrome-devtools-mcp")
+                .output()
+                .await;
+        });
     }
 }
