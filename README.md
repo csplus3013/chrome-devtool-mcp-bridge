@@ -1,4 +1,4 @@
-# 🌉 MCP Server Bridge (V16)
+# 🌉 MCP Server Bridge (V17)
 
 A high-performance **Rust bridge** that exposes stdio-based [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers over the network using **HTTP + SSE** (Server-Sent Events).
 
@@ -6,7 +6,13 @@ Designed specifically to make the **Chrome DevTools MCP server** accessible to r
 
 ---
 
-## 🚀 Version 16 Core Features
+## 🚀 Version 17 Core Features
+
+- **Stdin EOF Race Fix**: `chrome-devtools-mcp` v1.1.0+ exits immediately when its stdin reaches EOF ([#2117](https://github.com/ChromeDevTools/chrome-devtools-mcp/issues/2117)). The writer task previously dropped `child_stdin` when the internal mpsc channel returned `None` during session teardown, sending a spurious EOF and killing the child. Fixed: the writer now holds stdin open and waits for the explicit cancel signal before breaking.
+- **Proactive Zombie Session Cleanup**: When the child process exits unexpectedly (stdout EOF), the reader task now cancels the session token immediately. Previously the dead session lingered in the store until the SSE client timed out, causing the MCP client to hang silently. Fixed: the watcher task fires instantly and removes the zombie entry, so the client sees the stream end and can reconnect.
+- **Pinned `chrome-devtools-mcp` version**: `Dockerfile.devtool` now pins to `1.2.0` instead of `@latest` to prevent silent breakage from upstream transport changes.
+
+### Previously Introduced (V16)
 
 - **Guaranteed Orphan Cleanup**: On session teardown the bridge executes `docker exec <container> pkill -f chrome-devtools-mcp` to ensure any detached Node MCP process is terminated.
 - **No More "Node Army"**: Prevents accumulation of idle `chrome-devtools-mcp` processes even if clients crash during tool execution.
@@ -166,10 +172,10 @@ docker exec chrome-mcp-server node -e "const dns=require('dns');dns.lookup('host
 docker compose logs -f chrome-mcp-server
 ```
 
-**Confirm V11 is running:**
+**Confirm V17 is running:**
 
 ```text
-@@@ MCP BRIDGE VERSION 11 - SESSION CLEANUP FIX @@@
+@@@ MCP BRIDGE VERSION 17 - STDIN-EOF FIX FOR chrome-devtools-mcp v1.1.0+ @@@
 Resolved hostname to IP  original=http://host.docker.internal:9322  resolved=http://192.168.65.254:9322
 mcp-server-bridge listening  addr=0.0.0.0:3000  mcp_args=["--browser-url=http://192.168.65.254:9322"]
 ```
@@ -196,5 +202,5 @@ If tools are discovered but calls fail:
 ```bash
 # Inside mcp-server-bridge directory
 cargo build --release
-tar -cvzf target/release/mcp-server-bridge_bin_v10.tar -C target/release mcp-server-bridge
+cp target/release/mcp-server-bridge bin/mcp-server-bridge
 ```

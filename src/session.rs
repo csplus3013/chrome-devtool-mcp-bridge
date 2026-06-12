@@ -93,6 +93,12 @@ pub async fn create_session(
     let cancel_reader = cancel.clone();
 
     // Writer task: forward stdin_rx → child stdin
+    //
+    // IMPORTANT: do NOT close child_stdin (send EOF) when the channel returns None.
+    // chrome-devtools-mcp v1.1.0+ exits immediately on stdin EOF (#2117).
+    // The channel returns None when Session's stdin_tx is dropped (during teardown).
+    // In that case we simply wait for the cancel token before breaking, keeping
+    // stdin open until the Session is explicitly destroyed.
     let writer_task = tokio::spawn(async move {
         let mut child_stdin = child_stdin;
         loop {
@@ -120,7 +126,11 @@ pub async fn create_session(
                             }
                         }
                         None => {
-                            debug!("stdin channel closed");
+                            // All stdin_tx senders dropped — Session is being torn down.
+                            // Wait for explicit cancellation rather than dropping child_stdin
+                            // immediately, to avoid sending spurious EOF to the child process.
+                            debug!("stdin channel closed — holding stdin open until cancel");
+                            cancel_writer.cancelled().await;
                             break;
                         }
                     }
@@ -130,6 +140,10 @@ pub async fn create_session(
     });
 
     // Reader task: child stdout → sse_tx broadcast
+    //
+    // When the child exits on its own (stdout EOF), we cancel the session token
+    // immediately so the watcher task removes the zombie session from the store.
+    // Without this, the session would linger until the SSE client timed out.
     let reader_task = tokio::spawn(async move {
         let reader = BufReader::new(child_stdout);
         let mut lines = reader.lines();
@@ -148,11 +162,16 @@ pub async fn create_session(
                         }
                         Ok(Some(_)) => {} // empty line, skip
                         Ok(None) => {
-                            info!("child stdout EOF");
+                            // Child process exited — cancel the session token so the
+                            // watcher task proactively cleans up this zombie session.
+                            // The SSE client will see the stream end and can reconnect.
+                            warn!("child stdout EOF — process exited unexpectedly, cancelling session");
+                            cancel_reader.cancel();
                             break;
                         }
                         Err(e) => {
                             error!(?e, "read from child stdout failed");
+                            cancel_reader.cancel();
                             break;
                         }
                     }
